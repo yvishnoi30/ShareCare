@@ -40,6 +40,7 @@ dependencies:
   flutter_file_dialog: ^3.3.3
   path_provider: ^2.1.6
   saf: ^2.1.2
+  shared_preferences: ^2.5.6
 
 dev_dependencies:
   flutter_test:

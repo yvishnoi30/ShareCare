@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -10,32 +9,84 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'transfer/sender_service.dart';
+import 'ui/app_theme.dart';
+import 'ui/theme_controller.dart';
+import 'ui/widgets.dart';
 
-void main() {
-  runApp(const ShareCareApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Load the saved theme before the first frame so the app never flashes the
+  // wrong theme on start-up.
+  final ThemeController themeController = ThemeController();
+  await themeController.restore();
+
+  runApp(ShareCareApp(themeController: themeController));
 }
 
-class ShareCareApp extends StatelessWidget {
-  const ShareCareApp({super.key});
+class ShareCareApp extends StatefulWidget {
+  const ShareCareApp({super.key, this.themeController});
+
+  /// Optional. When omitted the app creates and owns its own controller.
+  final ThemeController? themeController;
+
+  @override
+  State<ShareCareApp> createState() => _ShareCareAppState();
+}
+
+class _ShareCareAppState extends State<ShareCareApp> {
+  late final ThemeController _themeController;
+  late final bool _ownsController;
+
+  final ThemeData _lightTheme = AppTheme.light();
+  final ThemeData _darkTheme = AppTheme.dark();
+
+  @override
+  void initState() {
+    super.initState();
+
+    _ownsController = widget.themeController == null;
+    _themeController = widget.themeController ?? ThemeController();
+
+    if (_ownsController) {
+      _themeController.restore();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_ownsController) {
+      _themeController.dispose();
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'ShareCare',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4169E1),
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF6F8FC),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFFF6F8FC),
-          centerTitle: false,
-        ),
+    return ThemeScope(
+      controller: _themeController,
+      child: ListenableBuilder(
+        listenable: _themeController,
+        builder: (BuildContext context, Widget? child) {
+          return MaterialApp(
+            title: 'ShareCare',
+            debugShowCheckedModeBanner: false,
+            theme: _lightTheme,
+            darkTheme: _darkTheme,
+            themeMode: _themeController.mode,
+            builder: (BuildContext context, Widget? child) {
+              // Respect the user's text size, but keep layouts from breaking
+              // at the extremes.
+              return MediaQuery.withClampedTextScaling(
+                minScaleFactor: 0.8,
+                maxScaleFactor: 1.6,
+                child: child ?? const SizedBox.shrink(),
+              );
+            },
+            home: const HomeScreen(),
+          );
+        },
       ),
-      home: const HomeScreen(),
     );
   }
 }
@@ -216,6 +267,10 @@ String mimeTypeForFile(String name) {
       'application/octet-stream';
 }
 
+// ===========================================================================
+// Home screen
+// ===========================================================================
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -300,158 +355,338 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Asks before removing every selected file from the list. The files on the
+  /// device are never touched; only the selection is cleared.
+  Future<void> _confirmClearAll() async {
+    if (_selectedFiles.isEmpty) return;
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          icon: const Icon(Icons.delete_sweep_outlined),
+          title: const Text('Clear all files?'),
+          content: Text(
+            'This removes ${fileCountLabel(_selectedFiles.length)} from '
+            'your list. The files stay on your device.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Keep files'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Clear all'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true && mounted) {
+      setState(() {
+        _selectedFiles.clear();
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'ShareCare',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
+        title: const Text('ShareCare'),
         actions: <Widget>[
+          const ThemeToggleButton(),
           IconButton(
             tooltip: 'Receive files',
             onPressed: _openReceiver,
-            icon: const Icon(Icons.qr_code_scanner),
+            icon: const Icon(Icons.download_rounded),
           ),
           const SizedBox(width: 8),
         ],
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760),
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: <Widget>[
-              const SizedBox(height: 8),
-              const Icon(
-                Icons.devices_rounded,
-                size: 64,
-                color: Color(0xFF4169E1),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Share files. Simply.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineMedium
-                    ?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Send files directly between devices on your local network.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 28),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      FilledButton.icon(
-                        onPressed: _isPickingFiles ? null : _pickFiles,
-                        icon: _isPickingFiles
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.add),
-                        label: Text(
-                          _isPickingFiles
-                              ? 'Selecting files...'
-                              : 'Select files to send',
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: Text(
-                              _selectedFiles.isEmpty
-                                  ? 'No files selected'
-                                  : '${_selectedFiles.length} file(s) selected',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                          if (_selectedFiles.isNotEmpty)
-                            TextButton(
-                              onPressed: () {
-                                setState(() {
-                                  _selectedFiles.clear();
-                                });
-                              },
-                              child: const Text('Clear all'),
-                            ),
-                        ],
-                      ),
-                      if (_selectedFiles.isNotEmpty) ...<Widget>[
-                        Text('Total size: ${formatBytes(_totalBytes)}'),
-                        const SizedBox(height: 8),
-                        ...List<Widget>.generate(
-                          _selectedFiles.length,
-                          (int index) {
-                            final PlatformFile file = _selectedFiles[index];
-
-                            return ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: Icon(iconForFile(file.name)),
-                              title: Text(
-                                file.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Text(formatBytes(file.size)),
-                              trailing: IconButton(
-                                onPressed: () {
-                                  setState(() {
-                                    _selectedFiles.removeAt(index);
-                                  });
-                                },
-                                icon: const Icon(Icons.close),
-                              ),
-                            );
-                          },
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-                      FilledButton.icon(
-                        onPressed:
-                            _selectedFiles.isEmpty ? null : _openSender,
-                        icon: const Icon(Icons.qr_code_2),
-                        label: const Text('Continue to connect'),
-                      ),
-                    ],
+      body: SafeArea(
+        top: false,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+              children: <Widget>[
+                FadeSlideIn(child: _buildHero(context)),
+                const SizedBox(height: AppSpacing.xxl),
+                FadeSlideIn(
+                  delay: const Duration(milliseconds: 90),
+                  child: _buildActions(context),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                FadeSlideIn(
+                  delay: const Duration(milliseconds: 180),
+                  child: _buildSelectionCard(context),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                const FadeSlideIn(
+                  delay: Duration(milliseconds: 270),
+                  child: _HowItWorksCard(),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                const FadeSlideIn(
+                  delay: Duration(milliseconds: 270),
+                  child: InstructionCard(
+                    icon: Icons.wifi,
+                    title: 'Use the same network',
+                    description:
+                        'Connect both devices to the same Wi-Fi network, '
+                        'or connect both devices through a compatible hotspot.',
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: _openReceiver,
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Receive files on this device'),
-              ),
-              const SizedBox(height: 20),
-              const InstructionCard(
-                icon: Icons.wifi,
-                title: 'Use the same network',
-                description:
-                    'Connect both devices to the same Wi-Fi network, '
-                    'or connect the phone to your laptop hotspot.',
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+
+  Widget _buildHero(BuildContext context) {
+    final ColorScheme scheme = context.colors;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            const BrandMark(size: 64),
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(
+              child: Semantics(
+                header: true,
+                child: Text(
+                  'Share files. Simply.',
+                  style: context.text.headlineMedium,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Text(
+          'Send files directly between devices on your local network.',
+          style: context.text.bodyLarge?.copyWith(
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActions(BuildContext context) {
+    final ColorScheme scheme = context.colors;
+    final bool hasFiles = _selectedFiles.isNotEmpty;
+
+    final Widget sendTile = ActionTile(
+      icon: Icons.upload_file_rounded,
+      title: 'Send files',
+      subtitle: _isPickingFiles
+          ? 'Selecting files...'
+          : hasFiles
+              ? 'Add more files'
+              : 'Choose files to share',
+      onPressed: _isPickingFiles ? null : _pickFiles,
+      loading: _isPickingFiles,
+      background: scheme.primaryContainer,
+      foreground: scheme.onPrimaryContainer,
+    );
+
+    final Widget receiveTile = ActionTile(
+      icon: Icons.download_rounded,
+      title: 'Receive files',
+      subtitle: 'Scan the code on the sending device',
+      onPressed: _openReceiver,
+      background: scheme.tertiaryContainer,
+      foreground: scheme.onTertiaryContainer,
+    );
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        // Stack the two actions on very narrow screens or large text sizes.
+        final bool stacked = constraints.maxWidth < 340 ||
+            MediaQuery.textScalerOf(context).scale(1) > 1.3;
+
+        if (stacked) {
+          return Column(
+            children: <Widget>[
+              sendTile,
+              const SizedBox(height: AppSpacing.md),
+              receiveTile,
+            ],
+          );
+        }
+
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Expanded(child: sendTile),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(child: receiveTile),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSelectionCard(BuildContext context) {
+    final bool hasFiles = _selectedFiles.isNotEmpty;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SectionHeader(
+            title: 'Files to send',
+            trailing: hasFiles
+                ? TextButton.icon(
+                    onPressed: _confirmClearAll,
+                    icon: const Icon(Icons.delete_sweep_outlined),
+                    label: const Text('Clear all'),
+                  )
+                : null,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          if (!hasFiles)
+            const EmptyState(
+              icon: Icons.folder_open_outlined,
+              title: 'No files selected',
+              message: 'Tap Send files above to choose what you want to share.',
+            )
+          else ...<Widget>[
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: <Widget>[
+                InfoChip(
+                  icon: Icons.attach_file_rounded,
+                  label: '${fileCountLabel(_selectedFiles.length)} selected',
+                ),
+                InfoChip(
+                  icon: Icons.data_usage_rounded,
+                  label: 'Total size: ${formatBytes(_totalBytes)}',
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+            AnimatedSize(
+              duration:
+                  motionDuration(context, const Duration(milliseconds: 220)),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: Column(
+                children: List<Widget>.generate(
+                  _selectedFiles.length,
+                  (int index) {
+                    final PlatformFile file = _selectedFiles[index];
+
+                    return Padding(
+                      key: ValueKey<String>(file.path ?? file.name),
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                      child: FileTile(
+                        icon: iconForFile(file.name),
+                        name: file.name,
+                        subtitle: Text(
+                          formatBytes(file.size),
+                          style: context.text.bodyMedium?.copyWith(
+                            color: context.colors.onSurfaceVariant,
+                          ),
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Remove ${file.name}',
+                          onPressed: () {
+                            setState(() {
+                              _selectedFiles.removeAt(index);
+                            });
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.md),
+          PressableScale(
+            enabled: hasFiles,
+            child: FilledButton.icon(
+              onPressed: hasFiles ? _openSender : null,
+              icon: const Icon(Icons.qr_code_2),
+              label: const Text('Continue to connect'),
+            ),
+          ),
+          if (!hasFiles) ...<Widget>[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'Select at least one file to continue.',
+              textAlign: TextAlign.center,
+              style: context.text.bodyMedium?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
+
+class _HowItWorksCard extends StatelessWidget {
+  const _HowItWorksCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SectionHeader(title: 'How sharing works'),
+          SizedBox(height: AppSpacing.lg),
+          StepRow(
+            number: 1,
+            title: 'Choose your files',
+            description: 'Tap Send files and pick what you want to share.',
+          ),
+          SizedBox(height: AppSpacing.lg),
+          StepRow(
+            number: 2,
+            title: 'Show the QR code',
+            description:
+                'Tap Continue to connect, then Start sharing to show a QR code.',
+          ),
+          SizedBox(height: AppSpacing.lg),
+          StepRow(
+            number: 3,
+            title: 'Scan and save',
+            description:
+                'On the other device, tap Receive files, scan the code and '
+                'choose where to save.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// Connection (sender) screen
+// ===========================================================================
+
+enum _SenderPhase { stopped, starting, noNetwork, waiting, connected, error }
+
+const String _senderStoppedMessage =
+    'Tap Start sharing to show the QR code.';
 
 class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({
@@ -473,7 +708,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   bool _isChecking = false;
   bool? _healthCheckPassed;
 
-  String _status = 'Sender is stopped.';
+  String _status = _senderStoppedMessage;
   String? _pairedDeviceAddress;
   String? _errorMessage;
 
@@ -487,7 +722,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
         if (!mounted) return;
         setState(() {
           _pairedDeviceAddress = address;
-          _status = 'Phone connected successfully.';
+          _status = 'The other device is connected and can now receive '
+              'your files.';
         });
       },
     );
@@ -508,7 +744,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       _errorMessage = null;
       _healthCheckPassed = null;
       _pairedDeviceAddress = null;
-      _status = 'Starting local sender...';
+      _status = 'Getting ready to share your files...';
     });
 
     try {
@@ -517,14 +753,16 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
       setState(() {
         _status = _senderService.localAddress == null
-            ? 'Server started, but no local IPv4 address was found.'
-            : 'Waiting for your Android phone to scan the QR.';
+            ? 'Sharing started, but no Wi-Fi or hotspot address was found. '
+                'Connect to a network, then stop and start sharing again.'
+            : 'Waiting for another device to scan the QR code.';
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _errorMessage = error.toString();
-        _status = 'Could not start the local sender.';
+        _status = 'Sharing could not be started. Check your network and '
+            'try again.';
       });
     } finally {
       if (mounted) {
@@ -540,7 +778,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     if (!mounted) return;
 
     setState(() {
-      _status = 'Sender is stopped.';
+      _status = _senderStoppedMessage;
       _healthCheckPassed = null;
       _pairedDeviceAddress = null;
       _errorMessage = null;
@@ -561,165 +799,369 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     setState(() {
       _healthCheckPassed = result;
       _status = result
-          ? 'Local sender health check passed.'
-          : 'Local sender health check failed.';
+          ? 'Connection test passed. This device is ready to share.'
+          : 'Connection test failed. Stop sharing, check your network, '
+              'then start again.';
       _isChecking = false;
     });
+  }
+
+  _SenderPhase _phaseFor(bool running) {
+    if (_errorMessage != null) return _SenderPhase.error;
+    if (_isStarting) return _SenderPhase.starting;
+    if (!running) return _SenderPhase.stopped;
+    if (_pairedDeviceAddress != null) return _SenderPhase.connected;
+    if (_senderService.localAddress == null) return _SenderPhase.noNetwork;
+    return _SenderPhase.waiting;
+  }
+
+  Widget _buildStatusBanner(_SenderPhase phase) {
+    if (phase == _SenderPhase.error) {
+      return StatusBanner(
+        tone: StatusTone.error,
+        title: 'Could not start sharing',
+        message: _status,
+        details: 'Details: $_errorMessage',
+      );
+    }
+
+    if (phase == _SenderPhase.starting) {
+      return StatusBanner(
+        tone: StatusTone.progress,
+        title: 'Starting',
+        message: _status,
+      );
+    }
+
+    if (phase == _SenderPhase.noNetwork) {
+      return StatusBanner(
+        tone: StatusTone.warning,
+        title: 'No network found',
+        message: _status,
+      );
+    }
+
+    if (phase == _SenderPhase.connected) {
+      return StatusBanner(
+        tone: StatusTone.success,
+        title: 'Device connected',
+        message: _status,
+      );
+    }
+
+    if (phase == _SenderPhase.waiting) {
+      return StatusBanner(
+        tone: StatusTone.info,
+        icon: Icons.qr_code_scanner,
+        title: 'Ready to connect',
+        message: _status,
+      );
+    }
+
+    return StatusBanner(
+      tone: StatusTone.info,
+      icon: Icons.pause_circle_outline_rounded,
+      title: 'Not sharing yet',
+      message: _status,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final String? qrData = _senderService.pairingData;
     final bool running = _senderService.isRunning;
+    final _SenderPhase phase = _phaseFor(running);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Connect device')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 620),
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: <Widget>[
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: <Widget>[
-                      const Icon(
-                        Icons.qr_code_2,
-                        size: 48,
-                        color: Color(0xFF4169E1),
-                      ),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'Pair your Android phone',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Start the sender, then scan the generated QR '
-                        'code using ShareCare on your phone.',
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 20),
-                      if (qrData != null &&
-                          _senderService.localAddress != null)
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          color: Colors.white,
-                          child: QrImageView(
-                            data: qrData,
-                            version: QrVersions.auto,
-                            size: 230,
-                            backgroundColor: Colors.white,
-                          ),
-                        )
-                      else
-                        const SizedBox(
-                          height: 180,
-                          child: Center(
-                            child: Text(
-                              'Start the sender to generate QR',
-                            ),
-                          ),
-                        ),
-                      const SizedBox(height: 16),
-                      if (running) ...<Widget>[
-                        SelectableText(
-                          'Laptop address: '
-                          '${_senderService.localAddress ?? "Not found"}',
-                        ),
-                        Text('Port: ${_senderService.port}'),
-                        Text(
-                          '${widget.files.length} file(s) ready to send',
-                        ),
-                      ],
-                      const SizedBox(height: 20),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: _isStarting || running
-                              ? null
-                              : _startSender,
-                          icon: const Icon(Icons.play_arrow),
-                          label: Text(
-                            _isStarting
-                                ? 'Starting...'
-                                : 'Start local sender',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: running ? _stopSender : null,
-                          icon: const Icon(Icons.stop),
-                          label: const Text('Stop local sender'),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: running && !_isChecking
-                              ? _testSender
-                              : null,
-                          icon: const Icon(Icons.network_check),
-                          label: Text(
-                            _isChecking
-                                ? 'Testing...'
-                                : 'Test sender connection',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+      appBar: AppBar(
+        title: const Text('Connect device'),
+        actions: const <Widget>[
+          ThemeToggleButton(),
+          SizedBox(width: 8),
+        ],
+      ),
+      body: SafeArea(
+        top: false,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+              children: <Widget>[
+                _buildStatusBanner(phase),
+                const SizedBox(height: AppSpacing.lg),
+                _buildQrCard(context, qrData, running),
+                if (running) ...<Widget>[
+                  const SizedBox(height: AppSpacing.lg),
+                  _buildDetailsCard(context),
+                ],
+                const SizedBox(height: AppSpacing.lg),
+                const _ConnectStepsCard(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQrCard(BuildContext context, String? qrData, bool running) {
+    final bool? healthPassed = _healthCheckPassed;
+
+    return AppCard(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(
+            'Connect a device',
+            textAlign: TextAlign.center,
+            style: context.text.headlineSmall,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Start sharing, then scan the QR code using ShareCare on the '
+            'receiving device.',
+            textAlign: TextAlign.center,
+            style: context.text.bodyLarge?.copyWith(
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          // 254 = the 230 px QR code plus 12 px of white padding on each
+          // side. Reserving it keeps the layout still when the code appears.
+          SizedBox(
+            height: 254,
+            child: AnimatedSwitcher(
+              duration:
+                  motionDuration(context, const Duration(milliseconds: 250)),
+              child: qrData != null && _senderService.localAddress != null
+                  ? _QrTile(key: const ValueKey<String>('qr'), data: qrData)
+                  : const _QrPlaceholder(
+                      key: ValueKey<String>('placeholder'),
+                    ),
+            ),
+          ),
+          if (running) ...<Widget>[
+            const SizedBox(height: AppSpacing.lg),
+            Center(
+              child: InfoChip(
+                icon: Icons.insert_drive_file_outlined,
+                label: '${fileCountLabel(widget.files.length)} ready to send',
+              ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.xl),
+          PressableScale(
+            enabled: !(_isStarting || running),
+            child: FilledButton.icon(
+              onPressed: _isStarting || running ? null : _startSender,
+              icon: _isStarting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      _errorMessage != null
+                          ? Icons.refresh_rounded
+                          : Icons.play_arrow,
+                    ),
+              label: Text(
+                _isStarting
+                    ? 'Starting...'
+                    : _errorMessage != null
+                        ? 'Try again'
+                        : 'Start sharing',
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          PressableScale(
+            enabled: running,
+            child: OutlinedButton.icon(
+              onPressed: running ? _stopSender : null,
+              icon: const Icon(Icons.stop),
+              label: const Text('Stop sharing'),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          PressableScale(
+            enabled: running && !_isChecking,
+            child: OutlinedButton.icon(
+              onPressed: running && !_isChecking ? _testSender : null,
+              icon: _isChecking
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.network_check),
+              label: Text(_isChecking ? 'Testing...' : 'Test connection'),
+            ),
+          ),
+          if (healthPassed != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            Center(
+              child: Semantics(
+                liveRegion: true,
+                child: InfoChip(
+                  tone: healthPassed ? StatusTone.success : StatusTone.error,
+                  icon: healthPassed
+                      ? Icons.check_circle_rounded
+                      : Icons.cancel_rounded,
+                  label: healthPassed
+                      ? 'Connection test passed'
+                      : 'Connection test failed',
                 ),
               ),
-              const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      const Text(
-                        'Connection status',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(_status),
-                      if (_pairedDeviceAddress != null)
-                        Text('Phone address: $_pairedDeviceAddress'),
-                      if (_healthCheckPassed != null)
-                        Text(
-                          _healthCheckPassed!
-                              ? 'Local server check: PASS'
-                              : 'Local server check: FAIL',
-                        ),
-                      if (_errorMessage != null)
-                        Text(
-                          'Error: $_errorMessage',
-                          style: const TextStyle(color: Colors.red),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailsCard(BuildContext context) {
+    final String? pairedAddress = _pairedDeviceAddress;
+
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: ExpansionTile(
+        shape: const Border(),
+        collapsedShape: const Border(),
+        tilePadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.xl,
+          vertical: AppSpacing.xs,
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(
+          AppSpacing.xl,
+          0,
+          AppSpacing.xl,
+          AppSpacing.lg,
+        ),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        expandedAlignment: Alignment.centerLeft,
+        leading: const Icon(Icons.info_outline_rounded),
+        title: Text('Connection details', style: context.text.titleMedium),
+        subtitle: const Text('For troubleshooting'),
+        children: <Widget>[
+          SelectableText(
+            'Sender address: '
+            '${_senderService.localAddress ?? "Not found"}',
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text('Port: ${_senderService.port}'),
+          if (pairedAddress != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.xs),
+            SelectableText('Connected device address: $pairedAddress'),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _QrTile extends StatelessWidget {
+  const _QrTile({super.key, required this.data});
+
+  final String data;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Semantics(
+        label: 'QR code for connecting another device',
+        image: true,
+        excludeSemantics: true,
+        // The code stays black on white in both themes so cameras can
+        // always read it.
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            border: Border.all(color: context.colors.outlineVariant),
+          ),
+          child: QrImageView(
+            data: data,
+            version: QrVersions.auto,
+            size: 230,
+            backgroundColor: Colors.white,
           ),
         ),
       ),
     );
   }
 }
+
+class _QrPlaceholder extends StatelessWidget {
+  const _QrPlaceholder({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = context.colors;
+
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          ExcludeSemantics(
+            child: Icon(Icons.qr_code_2, size: 72, color: scheme.outline),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            'Start sharing to show the QR code',
+            textAlign: TextAlign.center,
+            style: context.text.bodyLarge?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConnectStepsCard extends StatelessWidget {
+  const _ConnectStepsCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SectionHeader(title: 'How to connect'),
+          SizedBox(height: AppSpacing.lg),
+          StepRow(
+            number: 1,
+            title: 'Join the same network',
+            description:
+                'Connect both devices to the same Wi-Fi network or hotspot.',
+          ),
+          SizedBox(height: AppSpacing.lg),
+          StepRow(
+            number: 2,
+            title: 'Open Receive files',
+            description:
+                'On the other device, open ShareCare and tap Receive files.',
+          ),
+          SizedBox(height: AppSpacing.lg),
+          StepRow(
+            number: 3,
+            title: 'Scan this QR code',
+            description: 'Point the other device\u2019s camera at the code above.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// Receiver screen
+// ===========================================================================
 
 class ReceivedFile {
   const ReceivedFile({
@@ -756,7 +1198,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
   bool _hasProcessedCode = false;
   bool _isLoadingFiles = false;
 
-  String _status = 'Scan the QR code shown on the sender laptop.';
+  String _status = 'Scan the QR code shown on the sending device.';
 
   String? _host;
   int? _port;
@@ -821,7 +1263,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
 
       if (result['status'] != 'paired') {
         throw const FormatException(
-          'The laptop did not confirm pairing.',
+          'The sending device did not confirm pairing.',
         );
       }
 
@@ -917,7 +1359,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
 
       if (rawFiles is! List) {
         throw const FormatException(
-          'The laptop returned an invalid file list.',
+          'The sending device returned an invalid file list.',
         );
       }
 
@@ -1095,10 +1537,183 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       _files = <ReceivedFile>[];
       _savedFiles.clear();
       _errorMessage = null;
-      _status = 'Scan the QR code shown on the sender laptop.';
+      _status = 'Scan the QR code shown on the sending device.';
     });
 
     await _scannerController.start();
+  }
+
+  Widget _buildStatusBanner(bool paired) {
+    final String? error = _errorMessage;
+
+    if (error != null) {
+      return StatusBanner(
+        tone: StatusTone.error,
+        title: paired
+            ? 'Connected, but something went wrong'
+            : 'Could not connect',
+        message: _status,
+        details: 'Details: $error',
+      );
+    }
+
+    if (_downloadingId != null) {
+      return StatusBanner(
+        tone: StatusTone.progress,
+        title: 'Receiving file',
+        message: _status,
+        progress: _downloadProgress,
+        progressLabel: '${(_downloadProgress * 100).round()}% downloaded',
+      );
+    }
+
+    if (_isConnecting || _isLoadingFiles) {
+      return StatusBanner(
+        tone: StatusTone.progress,
+        title: 'Connecting',
+        message: _status,
+      );
+    }
+
+    if (paired) {
+      return StatusBanner(
+        tone: StatusTone.success,
+        title: 'Connected',
+        message: _status,
+      );
+    }
+
+    return StatusBanner(
+      tone: StatusTone.info,
+      icon: Icons.qr_code_scanner,
+      title: 'Ready to scan',
+      message: _status,
+    );
+  }
+
+  Widget _buildScannerCard() {
+    return AppCard(
+      padding: EdgeInsets.zero,
+      radius: AppRadius.xl,
+      child: SizedBox(
+        height: 360,
+        child: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            MobileScanner(
+              controller: _scannerController,
+              onDetect: _onDetect,
+            ),
+            const IgnorePointer(child: _ScannerOverlay()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConnectedCard(BuildContext context) {
+    final StatusColors status = context.statusColors;
+
+    return AppCard(
+      padding: const EdgeInsets.symmetric(
+        vertical: AppSpacing.xxl,
+        horizontal: AppSpacing.lg,
+      ),
+      child: Column(
+        children: <Widget>[
+          IconBadge(
+            icon: Icons.check_rounded,
+            size: 72,
+            circular: true,
+            background: status.successContainer,
+            foreground: status.onSuccessContainer,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            'Connected to the sending device',
+            textAlign: TextAlign.center,
+            style: context.text.titleMedium,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReceivedFileTile(BuildContext context, ReceivedFile file) {
+    final bool downloading = _downloadingId == file.id;
+    final bool saved = _savedFiles.contains(file.id);
+    final ColorScheme scheme = context.colors;
+    final StatusColors status = context.statusColors;
+
+    Widget? trailing;
+
+    if (downloading) {
+      trailing = SizedBox(
+        width: 48,
+        height: 48,
+        child: Center(
+          child: SizedBox(
+            width: 26,
+            height: 26,
+            child: CircularProgressIndicator(
+              value: _downloadProgress,
+              strokeWidth: 3,
+              semanticsLabel: 'Downloading ${file.name}',
+            ),
+          ),
+        ),
+      );
+    } else if (!saved) {
+      trailing = IconButton.filledTonal(
+        tooltip: 'Receive ${file.name}',
+        style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
+        onPressed: _downloadingId == null ? () => _receiveFile(file) : null,
+        icon: const Icon(Icons.download_rounded),
+      );
+    }
+
+    return Padding(
+      key: ValueKey<String>(file.id),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: FileTile(
+        standalone: true,
+        icon: iconForFile(file.name),
+        name: file.name,
+        subtitle: Wrap(
+          spacing: AppSpacing.md,
+          runSpacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            Text(
+              formatBytes(file.size),
+              style: context.text.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            if (saved)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    Icons.check_circle_rounded,
+                    size: 16,
+                    color: status.success,
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  Text(
+                    'Saved',
+                    style: context.text.bodyMedium?.copyWith(
+                      color: status.success,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        ),
+        trailing: trailing,
+      ),
+    );
   }
 
   @override
@@ -1109,168 +1724,204 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       appBar: AppBar(
         title: const Text('Receive files'),
         actions: <Widget>[
+          const ThemeToggleButton(),
           IconButton(
-            tooltip: 'Toggle camera',
+            tooltip: 'Switch camera',
             onPressed: paired
                 ? null
                 : () => _scannerController.switchCamera(),
             icon: const Icon(Icons.cameraswitch),
           ),
+          const SizedBox(width: 4),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: <Widget>[
-          if (!paired)
-            Card(
-              clipBehavior: Clip.antiAlias,
-              child: SizedBox(
-                height: 360,
-                child: MobileScanner(
-                  controller: _scannerController,
-                  onDetect: _onDetect,
-                ),
-              ),
-            )
-          else
-            Card(
-              child: SizedBox(
-                height: 140,
-                child: Center(
-                  child: Icon(
-                    Icons.check_circle,
-                    color: Colors.green.shade600,
-                    size: 84,
-                  ),
-                ),
-              ),
-            ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: <Widget>[
-                  Icon(
-                    paired
-                        ? Icons.check_circle
-                        : _isConnecting
-                            ? Icons.sync
-                            : Icons.qr_code_scanner,
-                    size: 36,
-                    color: paired ? Colors.green : null,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    _status,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  if (_isConnecting || _isLoadingFiles) ...<Widget>[
-                    const SizedBox(height: 12),
-                    const CircularProgressIndicator(),
-                  ],
-                  if (_downloadingId != null) ...<Widget>[
-                    const SizedBox(height: 12),
-                    LinearProgressIndicator(value: _downloadProgress),
-                    const SizedBox(height: 6),
-                    Text(
-                      '${(_downloadProgress * 100).round()}% downloaded',
-                    ),
-                  ],
-                  if (_errorMessage != null) ...<Widget>[
-                    const SizedBox(height: 8),
-                    SelectableText(
-                      _errorMessage!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ],
-                  if (!paired && _hasProcessedCode && !_isConnecting)
-                    FilledButton(
+      body: SafeArea(
+        top: false,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+              children: <Widget>[
+                if (!paired)
+                  _buildScannerCard()
+                else
+                  _buildConnectedCard(context),
+                const SizedBox(height: AppSpacing.lg),
+                _buildStatusBanner(paired),
+                if (!paired && _hasProcessedCode && !_isConnecting)
+                  ...<Widget>[
+                  const SizedBox(height: AppSpacing.md),
+                  PressableScale(
+                    child: FilledButton.icon(
                       onPressed: _scanAgain,
-                      child: const Text('Try scanning again'),
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Try scanning again'),
                     ),
-                  if (paired)
-                    TextButton.icon(
+                  ),
+                ],
+                if (paired) ...<Widget>[
+                  const SizedBox(height: AppSpacing.sm),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
                       onPressed: _scanAgain,
                       icon: const Icon(Icons.link_off),
                       label: const Text('Disconnect'),
                     ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  SectionHeader(title: 'Files available (${_files.length})'),
+                  const SizedBox(height: AppSpacing.md),
+                  if (_files.isEmpty && !_isLoadingFiles)
+                    const EmptyState(
+                      icon: Icons.folder_off_outlined,
+                      title: 'No files to receive',
+                      message:
+                          'No files were selected on the sending device.',
+                    ),
+                  ..._files.map(
+                    (ReceivedFile file) =>
+                        _buildReceivedFileTile(context, file),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Tap the download button beside a file. This device will '
+                    'then ask where to save it.',
+                    textAlign: TextAlign.center,
+                    style: context.text.bodyMedium?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                    ),
+                  ),
                 ],
-              ),
+                if (!paired) ...<Widget>[
+                  const SizedBox(height: AppSpacing.lg),
+                  const InstructionCard(
+                    icon: Icons.wifi,
+                    title: 'Network required',
+                    description:
+                        'Both devices must be able to communicate over the '
+                        'same local network, or connect both devices through '
+                        'a compatible hotspot. Mobile data alone is not '
+                        'enough.',
+                  ),
+                ],
+              ],
             ),
           ),
-          if (paired) ...<Widget>[
-            const SizedBox(height: 16),
-            Text(
-              'Files available (${_files.length})',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            if (_files.isEmpty && !_isLoadingFiles)
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('No files were selected on the laptop.'),
-                ),
-              ),
-            ..._files.map((ReceivedFile file) {
-              final bool downloading = _downloadingId == file.id;
-              final bool saved = _savedFiles.contains(file.id);
-
-              return Card(
-                child: ListTile(
-                  leading: Icon(iconForFile(file.name)),
-                  title: Text(
-                    file.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(formatBytes(file.size)),
-                  trailing: downloading
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : saved
-                          ? const Icon(
-                              Icons.check_circle,
-                              color: Colors.green,
-                            )
-                          : IconButton(
-                              tooltip: 'Receive file',
-                              onPressed: _downloadingId == null
-                                  ? () => _receiveFile(file)
-                                  : null,
-                              icon: const Icon(Icons.download),
-                            ),
-                ),
-              );
-            }),
-            const SizedBox(height: 8),
-            const Text(
-              'Choose Receive beside a file. Android will then ask '
-              'where to save it.',
-              textAlign: TextAlign.center,
-            ),
-          ],
-          if (!paired) ...<Widget>[
-            const SizedBox(height: 12),
-            const InstructionCard(
-              icon: Icons.wifi,
-              title: 'Network required',
-              description:
-                  'Your phone must be able to reach the laptop over Wi-Fi '
-                  'or the laptop hotspot. Mobile data alone is not enough.',
-            ),
-          ],
-        ],
+        ),
       ),
     );
   }
 }
+
+/// Corner guides and a hint drawn over the live camera view.
+///
+/// Colors here are fixed on purpose: they sit on top of the camera image, not
+/// on the app theme, so they must stay readable in both themes.
+class _ScannerOverlay extends StatelessWidget {
+  const _ScannerOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        const CustomPaint(painter: _ScannerCornersPainter()),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.lg,
+                vertical: AppSpacing.sm,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black.withAlpha(150),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.qr_code_scanner, size: 18, color: Colors.white),
+                  SizedBox(width: AppSpacing.sm),
+                  Flexible(
+                    child: Text(
+                      'Point the camera at the QR code',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ScannerCornersPainter extends CustomPainter {
+  const _ScannerCornersPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double side = size.shortestSide * 0.62;
+    final Rect rect = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height / 2 - 12),
+      width: side,
+      height: side,
+    );
+    final double arm = side * 0.22;
+
+    final Paint paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.left, rect.top + arm)
+        ..lineTo(rect.left, rect.top)
+        ..lineTo(rect.left + arm, rect.top),
+      paint,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.right - arm, rect.top)
+        ..lineTo(rect.right, rect.top)
+        ..lineTo(rect.right, rect.top + arm),
+      paint,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.left, rect.bottom - arm)
+        ..lineTo(rect.left, rect.bottom)
+        ..lineTo(rect.left + arm, rect.bottom),
+      paint,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(rect.right - arm, rect.bottom)
+        ..lineTo(rect.right, rect.bottom)
+        ..lineTo(rect.right, rect.bottom - arm),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ===========================================================================
+// Shared instruction card
+// ===========================================================================
 
 class InstructionCard extends StatelessWidget {
   const InstructionCard({
@@ -1286,28 +1937,25 @@ class InstructionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+    return AppCard(
+      child: MergeSemantics(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Icon(
-              icon,
-              size: 28,
-              color: const Color(0xFF4169E1),
-            ),
+            IconBadge(icon: icon),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  Text(title, style: context.text.titleSmall),
+                  const SizedBox(height: AppSpacing.xs),
                   Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    description,
+                    style: context.text.bodyMedium?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(description),
                 ],
               ),
             ),

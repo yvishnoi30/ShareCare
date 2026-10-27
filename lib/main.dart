@@ -1,9 +1,15 @@
+import 'transfer/folder_archive_service.dart';
+import 'transfer/folder_archive_receiver.dart';
+import 'platform/platform_info.dart';
+import 'screens/desktop/desktop_home_screen.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_file_dialog/flutter_file_dialog.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -83,7 +89,9 @@ class _ShareCareAppState extends State<ShareCareApp> {
                 child: child ?? const SizedBox.shrink(),
               );
             },
-            home: const HomeScreen(),
+            home: isDesktopPlatform
+                ? const DesktopHomeScreen()
+                : const HomeScreen(),
           );
         },
       ),
@@ -110,21 +118,44 @@ IconData iconForFile(String name) {
   final String lower = name.toLowerCase();
 
   if ([
-    '.jpg', '.jpeg', '.png', '.webp', '.gif',
-    '.bmp', '.heic', '.heif', '.tif', '.tiff', '.svg'
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.webp',
+    '.gif',
+    '.bmp',
+    '.heic',
+    '.heif',
+    '.tif',
+    '.tiff',
+    '.svg',
   ].any(lower.endsWith)) {
     return Icons.image_outlined;
   }
 
   if ([
-    '.mp4', '.mov', '.mkv', '.avi', '.webm',
-    '.3gp', '.mpeg', '.mpg', '.wmv', '.m4v'
+    '.mp4',
+    '.mov',
+    '.mkv',
+    '.avi',
+    '.webm',
+    '.3gp',
+    '.mpeg',
+    '.mpg',
+    '.wmv',
+    '.m4v',
   ].any(lower.endsWith)) {
     return Icons.video_file_outlined;
   }
 
   if ([
-    '.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg', '.opus'
+    '.mp3',
+    '.wav',
+    '.aac',
+    '.m4a',
+    '.flac',
+    '.ogg',
+    '.opus',
   ].any(lower.endsWith)) {
     return Icons.audio_file_outlined;
   }
@@ -137,33 +168,37 @@ IconData iconForFile(String name) {
     return Icons.android_outlined;
   }
 
-  if ([
-    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2'
-  ].any(lower.endsWith)) {
+  if (['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2'].any(lower.endsWith)) {
     return Icons.folder_zip_outlined;
   }
 
-  if ([
-    '.doc', '.docx', '.odt', '.rtf'
-  ].any(lower.endsWith)) {
+  if (['.doc', '.docx', '.odt', '.rtf'].any(lower.endsWith)) {
     return Icons.description_outlined;
   }
 
-  if ([
-    '.xls', '.xlsx', '.csv', '.ods'
-  ].any(lower.endsWith)) {
+  if (['.xls', '.xlsx', '.csv', '.ods'].any(lower.endsWith)) {
     return Icons.table_chart_outlined;
   }
 
-  if ([
-    '.ppt', '.pptx', '.odp'
-  ].any(lower.endsWith)) {
+  if (['.ppt', '.pptx', '.odp'].any(lower.endsWith)) {
     return Icons.slideshow_outlined;
   }
 
   if ([
-    '.txt', '.md', '.json', '.xml', '.html', '.css',
-    '.js', '.dart', '.java', '.py', '.kt', '.c', '.cpp', '.h'
+    '.txt',
+    '.md',
+    '.json',
+    '.xml',
+    '.html',
+    '.css',
+    '.js',
+    '.dart',
+    '.java',
+    '.py',
+    '.kt',
+    '.c',
+    '.cpp',
+    '.h',
   ].any(lower.endsWith)) {
     return Icons.code_outlined;
   }
@@ -203,6 +238,7 @@ String safeReceivedFileName(String originalName) {
   // Reconstruct with the extension exactly once.
   return '$baseName$extension';
 }
+
 /// MIME type for a file name. Android's "Save as" dialog needs it to know
 /// where the extension starts, so a duplicate becomes "report (1).pdf"
 /// instead of "report.pdf (1)".
@@ -211,14 +247,11 @@ String mimeTypeForFile(String name) {
     // Documents
     'pdf': 'application/pdf',
     'doc': 'application/msword',
-    'docx':
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'xls': 'application/vnd.ms-excel',
-    'xlsx':
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'ppt': 'application/vnd.ms-powerpoint',
-    'pptx':
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'odt': 'application/vnd.oasis.opendocument.text',
     'ods': 'application/vnd.oasis.opendocument.spreadsheet',
     'odp': 'application/vnd.oasis.opendocument.presentation',
@@ -298,8 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      final FilePickerResult? result =
-          await FilePicker.platform.pickFiles(
+      final FilePickerResult? result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
         type: FileType.any,
         withData: false,
@@ -335,24 +367,67 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _pickFolder() async {
+    if (_isPickingFiles) return;
+
+    setState(() {
+      _isPickingFiles = true;
+    });
+
+    try {
+      final PlatformFile? archive =
+          await FolderArchiveService.pickAndCreateZip();
+
+      if (archive == null || !mounted) return;
+
+      final String key = archive.path ?? archive.name;
+
+      final bool alreadySelected = _selectedFiles.any(
+        (PlatformFile existing) => (existing.path ?? existing.name) == key,
+      );
+
+      if (!alreadySelected) {
+        setState(() {
+          _selectedFiles.add(archive);
+        });
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text('Folder packaged: ${archive.name}')),
+          );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not package folder: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isPickingFiles = false;
+        });
+      }
+    }
+  }
+
   Future<void> _openSender() async {
     if (_selectedFiles.isEmpty) return;
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ConnectionScreen(
-          files: List<PlatformFile>.of(_selectedFiles),
-        ),
+        builder: (_) =>
+            ConnectionScreen(files: List<PlatformFile>.of(_selectedFiles)),
       ),
     );
   }
 
   void _openReceiver() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const ReceiverScreen(),
-      ),
-    );
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => const ReceiverScreen()));
   }
 
   /// Asks before removing every selected file from the list. The files on the
@@ -491,8 +566,8 @@ class _HomeScreenState extends State<HomeScreen> {
       subtitle: _isPickingFiles
           ? 'Selecting files...'
           : hasFiles
-              ? 'Add more files'
-              : 'Choose files to share',
+          ? 'Add more files'
+          : 'Choose files to share',
       onPressed: _isPickingFiles ? null : _pickFiles,
       loading: _isPickingFiles,
       background: scheme.primaryContainer,
@@ -511,7 +586,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // Stack the two actions on very narrow screens or large text sizes.
-        final bool stacked = constraints.maxWidth < 340 ||
+        final bool stacked =
+            constraints.maxWidth < 340 ||
             MediaQuery.textScalerOf(context).scale(1) > 1.3;
 
         if (stacked) {
@@ -579,41 +655,42 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: AppSpacing.md),
             AnimatedSize(
-              duration:
-                  motionDuration(context, const Duration(milliseconds: 220)),
+              duration: motionDuration(
+                context,
+                const Duration(milliseconds: 220),
+              ),
               curve: Curves.easeOutCubic,
               alignment: Alignment.topCenter,
               child: Column(
-                children: List<Widget>.generate(
-                  _selectedFiles.length,
-                  (int index) {
-                    final PlatformFile file = _selectedFiles[index];
+                children: List<Widget>.generate(_selectedFiles.length, (
+                  int index,
+                ) {
+                  final PlatformFile file = _selectedFiles[index];
 
-                    return Padding(
-                      key: ValueKey<String>(file.path ?? file.name),
-                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                      child: FileTile(
-                        icon: iconForFile(file.name),
-                        name: file.name,
-                        subtitle: Text(
-                          formatBytes(file.size),
-                          style: context.text.bodyMedium?.copyWith(
-                            color: context.colors.onSurfaceVariant,
-                          ),
-                        ),
-                        trailing: IconButton(
-                          tooltip: 'Remove ${file.name}',
-                          onPressed: () {
-                            setState(() {
-                              _selectedFiles.removeAt(index);
-                            });
-                          },
-                          icon: const Icon(Icons.close_rounded),
+                  return Padding(
+                    key: ValueKey<String>(file.path ?? file.name),
+                    padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                    child: FileTile(
+                      icon: iconForFile(file.name),
+                      name: file.name,
+                      subtitle: Text(
+                        formatBytes(file.size),
+                        style: context.text.bodyMedium?.copyWith(
+                          color: context.colors.onSurfaceVariant,
                         ),
                       ),
-                    );
-                  },
-                ),
+                      trailing: IconButton(
+                        tooltip: 'Remove ${file.name}',
+                        onPressed: () {
+                          setState(() {
+                            _selectedFiles.removeAt(index);
+                          });
+                        },
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ),
+                  );
+                }),
               ),
             ),
           ],
@@ -624,6 +701,13 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: hasFiles ? _openSender : null,
               icon: const Icon(Icons.qr_code_2),
               label: const Text('Continue to connect'),
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: _isPickingFiles ? null : _pickFolder,
+            icon: const Icon(Icons.create_new_folder_outlined),
+            label: Text(
+              _isPickingFiles ? 'Preparing folder...' : 'Send a folder',
             ),
           ),
           if (!hasFiles) ...<Widget>[
@@ -662,8 +746,7 @@ class _HowItWorksCard extends StatelessWidget {
           StepRow(
             number: 2,
             title: 'Show the QR code',
-            description:
-                'Tap Continue to connect, then Start sharing to show a QR code.',
+            description: 'Tap Continue to connect, then Start sharing to show a QR code.',
           ),
           SizedBox(height: AppSpacing.lg),
           StepRow(
@@ -685,14 +768,10 @@ class _HowItWorksCard extends StatelessWidget {
 
 enum _SenderPhase { stopped, starting, noNetwork, waiting, connected, error }
 
-const String _senderStoppedMessage =
-    'Tap Start sharing to show the QR code.';
+const String _senderStoppedMessage = 'Tap Start sharing to show the QR code.';
 
 class ConnectionScreen extends StatefulWidget {
-  const ConnectionScreen({
-    super.key,
-    required this.files,
-  });
+  const ConnectionScreen({super.key, required this.files});
 
   final List<PlatformFile> files;
 
@@ -717,16 +796,17 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     super.initState();
 
     _senderService = LocalSenderService(files: widget.files);
-    _pairingSubscription = _senderService.pairingUpdates.listen(
-      (String address) {
-        if (!mounted) return;
-        setState(() {
-          _pairedDeviceAddress = address;
-          _status = 'The other device is connected and can now receive '
-              'your files.';
-        });
-      },
-    );
+    _pairingSubscription = _senderService.pairingUpdates.listen((
+      String address,
+    ) {
+      if (!mounted) return;
+      setState(() {
+        _pairedDeviceAddress = address;
+        _status =
+            'The other device is connected and can now receive '
+            'your files.';
+      });
+    });
   }
 
   @override
@@ -754,14 +834,15 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       setState(() {
         _status = _senderService.localAddress == null
             ? 'Sharing started, but no Wi-Fi or hotspot address was found. '
-                'Connect to a network, then stop and start sharing again.'
+                  'Connect to a network, then stop and start sharing again.'
             : 'Waiting for another device to scan the QR code.';
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _errorMessage = error.toString();
-        _status = 'Sharing could not be started. Check your network and '
+        _status =
+            'Sharing could not be started. Check your network and '
             'try again.';
       });
     } finally {
@@ -801,7 +882,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       _status = result
           ? 'Connection test passed. This device is ready to share.'
           : 'Connection test failed. Stop sharing, check your network, '
-              'then start again.';
+                'then start again.';
       _isChecking = false;
     });
   }
@@ -875,10 +956,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Connect device'),
-        actions: const <Widget>[
-          ThemeToggleButton(),
-          SizedBox(width: 8),
-        ],
+        actions: const <Widget>[ThemeToggleButton(), SizedBox(width: 8)],
       ),
       body: SafeArea(
         top: false,
@@ -933,13 +1011,13 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           SizedBox(
             height: 254,
             child: AnimatedSwitcher(
-              duration:
-                  motionDuration(context, const Duration(milliseconds: 250)),
+              duration: motionDuration(
+                context,
+                const Duration(milliseconds: 250),
+              ),
               child: qrData != null && _senderService.localAddress != null
                   ? _QrTile(key: const ValueKey<String>('qr'), data: qrData)
-                  : const _QrPlaceholder(
-                      key: ValueKey<String>('placeholder'),
-                    ),
+                  : const _QrPlaceholder(key: ValueKey<String>('placeholder')),
             ),
           ),
           if (running) ...<Widget>[
@@ -949,6 +1027,23 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                 icon: Icons.insert_drive_file_outlined,
                 label: '${fileCountLabel(widget.files.length)} ready to send',
               ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            OutlinedButton.icon(
+              onPressed: qrData == null
+                  ? null
+                  : () async {
+                      final String code = qrData;
+                      await Clipboard.setData(ClipboardData(text: code));
+
+                      if (!context.mounted) return;
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Pairing code copied.')),
+                      );
+                    },
+              icon: const Icon(Icons.copy_rounded),
+              label: const Text('Copy pairing code'),
             ),
           ],
           const SizedBox(height: AppSpacing.xl),
@@ -971,8 +1066,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                 _isStarting
                     ? 'Starting...'
                     : _errorMessage != null
-                        ? 'Try again'
-                        : 'Start sharing',
+                    ? 'Try again'
+                    : 'Start sharing',
               ),
             ),
           ),
@@ -1024,6 +1119,24 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
   Widget _buildDetailsCard(BuildContext context) {
     final String? pairedAddress = _pairedDeviceAddress;
+    final String? pairingData = _senderService.pairingData;
+    String? sessionToken;
+
+    if (pairingData != null) {
+      try {
+        final dynamic decoded = jsonDecode(pairingData);
+
+        if (decoded is Map<String, dynamic>) {
+          final dynamic value = decoded['token'];
+
+          if (value is String && value.isNotEmpty) {
+            sessionToken = value;
+          }
+        }
+      } catch (_) {
+        // Pairing data may not be available yet.
+      }
+    }
 
     return AppCard(
       padding: EdgeInsets.zero,
@@ -1052,6 +1165,31 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           ),
           const SizedBox(height: AppSpacing.xs),
           Text('Port: ${_senderService.port}'),
+          if (sessionToken != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            const Text(
+              'Session token',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            SelectableText(sessionToken),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: sessionToken!));
+
+                  if (!context.mounted) return;
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Session token copied.')),
+                  );
+                },
+                icon: const Icon(Icons.copy_rounded),
+                label: const Text('Copy session token'),
+              ),
+            ),
+          ],
           if (pairedAddress != null) ...<Widget>[
             const SizedBox(height: AppSpacing.xs),
             SelectableText('Connected device address: $pairedAddress'),
@@ -1151,7 +1289,8 @@ class _ConnectStepsCard extends StatelessWidget {
           StepRow(
             number: 3,
             title: 'Scan this QR code',
-            description: 'Point the other device\u2019s camera at the code above.',
+            description:
+                'Point the other device\u2019s camera at the code above.',
           ),
         ],
       ),
@@ -1191,8 +1330,7 @@ class ReceiverScreen extends StatefulWidget {
 }
 
 class _ReceiverScreenState extends State<ReceiverScreen> {
-  final MobileScannerController _scannerController =
-      MobileScannerController();
+  final MobileScannerController _scannerController = MobileScannerController();
 
   bool _isConnecting = false;
   bool _hasProcessedCode = false;
@@ -1258,8 +1396,12 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         throw const FormatException('Invalid connection details.');
       }
 
-      final Map<String, dynamic> result =
-          await _getJson(host, port, '/pair', token);
+      final Map<String, dynamic> result = await _getJson(
+        host,
+        port,
+        '/pair',
+        token,
+      );
 
       if (result['status'] != 'paired') {
         throw const FormatException(
@@ -1314,11 +1456,11 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
       );
 
       final HttpClientRequest request = await client.getUrl(uri);
-      final HttpClientResponse response =
-          await request.close().timeout(const Duration(seconds: 20));
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 20),
+      );
 
-      final String body =
-          await response.transform(utf8.decoder).join();
+      final String body = await response.transform(utf8.decoder).join();
 
       final dynamic decoded = jsonDecode(body);
 
@@ -1352,8 +1494,12 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
     });
 
     try {
-      final Map<String, dynamic> result =
-          await _getJson(host, port, '/files', token);
+      final Map<String, dynamic> result = await _getJson(
+        host,
+        port,
+        '/files',
+        token,
+      );
 
       final dynamic rawFiles = result['files'];
 
@@ -1415,31 +1561,28 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         host: host,
         port: port,
         path: '/download',
-        queryParameters: <String, String>{
-          'token': token,
-          'id': file.id,
-        },
+        queryParameters: <String, String>{'token': token, 'id': file.id},
       );
 
       final HttpClientRequest request = await client.getUrl(uri);
-      final HttpClientResponse response =
-          await request.close().timeout(const Duration(seconds: 30));
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
 
       if (response.statusCode != HttpStatus.ok) {
-        final String errorBody =
-            await response.transform(utf8.decoder).join();
+        final String errorBody = await response.transform(utf8.decoder).join();
 
         throw HttpException(
           'Download failed (${response.statusCode}): $errorBody',
         );
       }
 
-      final Directory tempDirectory =
-          await Directory.systemTemp.createTemp('sharecare_');
+      final Directory tempDirectory = await Directory.systemTemp.createTemp(
+        'sharecare_',
+      );
 
       final String safeName = safeReceivedFileName(file.name);
-      final File temporaryFile =
-          File('${tempDirectory.path}/$safeName');
+      final File temporaryFile = File('${tempDirectory.path}/$safeName');
 
       temporaryPath = temporaryFile.path;
 
@@ -1472,6 +1615,35 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
           'received $received bytes.',
         );
       }
+      if (FolderArchiveReceiver.isFolderArchiveName(safeName)) {
+        if (mounted) {
+          setState(() {
+            _status = 'Preparing to extract the received folder...';
+          });
+        }
+
+        final String? extractedFolder =
+            await FolderArchiveReceiver.extractOnAndroid(
+              zipPath: temporaryFile.path,
+              suggestedFolderName:
+                  FolderArchiveReceiver.folderNameFromArchiveName(safeName),
+            );
+
+        if (!mounted) return;
+
+        if (extractedFolder == null) {
+          setState(() {
+            _status = 'Folder extraction cancelled.';
+          });
+        } else {
+          setState(() {
+            _savedFiles.add(file.id);
+            _status = 'Folder "$extractedFolder" received successfully.';
+          });
+        }
+
+        return;
+      }
 
       if (!mounted) return;
 
@@ -1483,7 +1655,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         params: SaveFileDialogParams(
           sourceFilePath: temporaryFile.path,
           fileName: safeName,
-          mimeTypesFilter: <String>[mimeTypeForFile(safeName)]
+          mimeTypesFilter: <String>[mimeTypeForFile(safeName)],
         ),
       );
 
@@ -1600,10 +1772,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            MobileScanner(
-              controller: _scannerController,
-              onDetect: _onDetect,
-            ),
+            MobileScanner(controller: _scannerController, onDetect: _onDetect),
             const IgnorePointer(child: _ScannerOverlay()),
           ],
         ),
@@ -1727,9 +1896,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
           const ThemeToggleButton(),
           IconButton(
             tooltip: 'Switch camera',
-            onPressed: paired
-                ? null
-                : () => _scannerController.switchCamera(),
+            onPressed: paired ? null : () => _scannerController.switchCamera(),
             icon: const Icon(Icons.cameraswitch),
           ),
           const SizedBox(width: 4),
@@ -1749,8 +1916,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
                   _buildConnectedCard(context),
                 const SizedBox(height: AppSpacing.lg),
                 _buildStatusBanner(paired),
-                if (!paired && _hasProcessedCode && !_isConnecting)
-                  ...<Widget>[
+                if (!paired && _hasProcessedCode && !_isConnecting) ...<Widget>[
                   const SizedBox(height: AppSpacing.md),
                   PressableScale(
                     child: FilledButton.icon(
@@ -1777,8 +1943,7 @@ class _ReceiverScreenState extends State<ReceiverScreen> {
                     const EmptyState(
                       icon: Icons.folder_off_outlined,
                       title: 'No files to receive',
-                      message:
-                          'No files were selected on the sending device.',
+                      message: 'No files were selected on the sending device.',
                     ),
                   ..._files.map(
                     (ReceivedFile file) =>
